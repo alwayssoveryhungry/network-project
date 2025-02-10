@@ -1,0 +1,193 @@
+Parameters:
+  KeyName:
+    Description: EC2 KeyPair
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: EC2 KeyPair
+  LatestAmiId:
+    Description: EC2 AMI 
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+    AllowedValues:
+      - /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+  MyVPC03:
+    Type: AWS::EC2::VPC
+    Properties:
+     CidrBlock: 10.11.0.0/16
+     EnableDnsSupport: true
+     EnableDnsHostnames: true
+     Tags:
+      - Key: Name
+        Value: MyVPC03
+
+  MyIGWforeign:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MyIGWforeign
+
+  MyIGWforeignattachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref MyIGWforeign
+      VpcId: !Ref MyVPC03
+
+  MyPublic3Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC03
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.11.1.0/24
+      Tags:
+        - Key: Name
+          Value: MyPublic3Subnet
+
+  MyPublic3Routing:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC03
+      Tags:
+        - Key: Name
+          Value: MyPublic3Routing
+
+  MyPublic3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyPublic3Routing
+      SubnetId: !Ref MyPublic3Subnet
+
+  MyPublic3Default:
+    Type: AWS::EC2::Route
+    DependsOn: MyIGWforeignattachment
+    Properties:
+      RouteTableId: !Ref MyPublic3Routing
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyIGWforeign
+
+  MyPublic3Secugroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref MyVPC03
+      GroupDescription: Permit HTTP(80), SSH(22), HTTPS(443) and ICMP
+      Tags:
+        - Key: Name
+          Value: MyPublic3Secugroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '443'
+        ToPort: '443'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: icmp
+        FromPort: -1
+        ToPort: -1
+        CidrIp: 0.0.0.0/0
+
+  MyWebforeign:
+    Type: AWS::EC2::Instance
+    DependsOn: MyIGWforeignattachment
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: t3.micro
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: MyWebforeign
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref MyPublic3Subnet
+          GroupSet:
+            - !Ref MyPublic3Secugroup
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.11.1.101
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            hostnamectl --static set-hostname MyWebforeign
+            echo "root:toor1234." | chpasswd
+            sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            sed -i 's/^#PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
+            systemctl restart sshd
+            yum install -y httpd
+            echo '<h1><p style="color:red">MyWebforeign test web page</p></h1>' > /var/www/html/index.html
+            systemctl enable --now httpd.service
+
+  MyPrivate4Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC03
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.11.100.0/24
+      Tags:
+        - Key: Name
+          Value: MyPrivate4Subnet
+
+  MyPrivate4Routing:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC03
+      Tags:
+        - Key: Name
+          Value: MyPrivate4Routing
+
+  MyPrivate4RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyPrivate4Routing
+      SubnetId: !Ref MyPrivate4Subnet
+
+  MyPrivate4Secugroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref MyVPC03
+      GroupDescription: Permit SSH(22) and ICMP
+      Tags:
+        - Key: Name
+          Value: MyPrivate4Secugroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: icmp
+        FromPort: -1
+        ToPort: -1
+        CidrIp: 0.0.0.0/0
+
+  MyWeb4:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: t3.micro
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: MyWeb4
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref MyPrivate4Subnet
+          GroupSet:
+            - !Ref MyPrivate4Secugroup
+          PrivateIpAddress: 10.11.100.101
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            hostnamectl --static set-hostname MyWeb4
+            echo "root:toor1234." | chpasswd
+            sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            sed -i 's/^#PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
+            systemctl restart sshd
+            yum install -y httpd
+            echo '<h1><p style="color:red">MyWeb4 test web page</p></h1>' > /var/www/html/index.html
+            systemctl enable --now httpd.service

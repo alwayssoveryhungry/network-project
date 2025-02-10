@@ -1,0 +1,237 @@
+Parameters:
+  KeyName:
+    Description: EC2 KeyPair
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: EC2 KeyPair
+  LatestAmiId:
+    Description: EC2 AMI
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+    AllowedValues:
+      - /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+
+Resources:
+  MyVPC01:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: 
+        - Key: Name
+          Value: MyVPC01
+
+  MyIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+        - Key: Name
+          Value: MyIGW
+
+  MyIGWattachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+       InternetGatewayId: !Ref MyIGW
+       VpcId: !Ref MyVPC01
+
+  MyPublic1Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC01
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.1.1.0/24
+      Tags: 
+        - Key: Name
+          Value: MyPublic1Subnet
+
+  MyPublic2Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC01
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: 10.1.2.0/24
+      Tags: 
+        - Key: Name
+          Value: MyPublic2Subnet
+
+  MyPublic1Routing:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC01
+      Tags: 
+        - Key: Name
+          Value: MyPublic1Routing
+
+  MyPublic2Routing:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC01
+      Tags: 
+        - Key: Name
+          Value: MyPublic2Routing
+
+  MyPublic1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyPublic1Routing
+      SubnetId: !Ref MyPublic1Subnet
+
+  MyPublic2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyPublic2Routing
+      SubnetId: !Ref MyPublic2Subnet
+
+  MyPublic1Default:
+    Type: AWS::EC2::Route
+    DependsOn: MyIGWattachment
+    Properties:
+      RouteTableId: !Ref MyPublic1Routing
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyIGW
+
+  MyPublic2Default:
+    Type: AWS::EC2::Route
+    DependsOn: MyIGWattachment
+    Properties:
+      RouteTableId: !Ref MyPublic2Routing
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyIGW
+
+  MySecugroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Permit HTTP(80), HTTPS(443) and SSH(22)
+      VpcId: !Ref MyVPC01
+      Tags: 
+        - Key: Name
+          Value: MySecugroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  MyWeb1:
+    Type: AWS::EC2::Instance
+    DependsOn: MyIGWattachment
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: MyWeb1
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref MyPublic1Subnet
+          GroupSet:
+            - !Ref MySecugroup
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.1.1.101
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            hostnamectl --static set-hostname MyWeb1
+            yum install -y httpd mariadb-server mariadb
+            yum install -y php php-mysqlnd php-gd
+            systemctl enable --now mariadb httpd
+            echo -e "\n\ntoor1234.\ntoor1234.\ny\nn\ny\ny\n" | /usr/bin/mysql_secure_installation
+            mysql -uroot -ptoor1234. -e "create database dvwa; GRANT ALL PRIVILEGES ON dvwa.* TO 'dvwa'@'localhost' IDENTIFIED BY 'toor1234.'; flush privileges;"
+            wget https://github.com/ncs10322/aws/raw/main/DVWA.zip
+            unzip DVWA.zip
+            mv DVWA/* /var/www/html/
+            sed -i "s/p@ssw0rd/toor1234./g" /var/www/html/config/config.inc.php
+            sed -i 's/allow_url_include = Off/allow_url_include = on/g' /etc/php.ini
+            chmod 777 /var/www/html/hackable/uploads
+            chmod 777 /var/www/html/config
+            systemctl restart httpd
+
+  MyWeb2:
+    Type: AWS::EC2::Instance
+    DependsOn: MyIGWattachment
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: MyWeb2
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref MyPublic2Subnet
+          GroupSet:
+            - !Ref MySecugroup
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.1.2.101
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            hostnamectl --static set-hostname MyWeb2
+            yum install -y httpd mariadb-server mariadb
+            yum install -y php php-mysqlnd php-gd
+            systemctl enable --now mariadb httpd
+            echo -e "\n\ntoor1234.\ntoor1234.\ny\nn\ny\ny\n" | /usr/bin/mysql_secure_installation
+            mysql -uroot -ptoor1234. -e "create database dvwa; GRANT ALL PRIVILEGES ON dvwa.* TO 'dvwa'@'localhost' IDENTIFIED BY 'toor1234.'; flush privileges;"
+            wget https://github.com/ncs10322/aws/raw/main/DVWA.zip
+            unzip DVWA.zip
+            mv DVWA/* /var/www/html/
+            sed -i "s/p@ssw0rd/toor1234./g" /var/www/html/config/config.inc.php
+            sed -i 's/allow_url_include = Off/allow_url_include = on/g' /etc/php.ini
+            chmod 777 /var/www/html/hackable/uploads
+            chmod 777 /var/www/html/config
+            systemctl restart httpd
+
+  MyALBtargetgroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn:
+      - MyWeb1
+      - MyWeb2
+    Properties:
+      Name: MyALBtargetgroup
+      Port: 80
+      Protocol: HTTP
+      HealthCheckPath: '/login.php'
+      VpcId: !Ref MyVPC01
+      Targets:
+        - Id: !Ref MyWeb1
+          Port: 80
+        - Id: !Ref MyWeb2
+          Port: 80
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+
+  MyALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: MyALBtargetgroup
+    Properties:
+      Scheme: internet-facing
+      Name: MyALB
+      SecurityGroups:
+        - !Ref MySecugroup
+      Subnets:
+        - !Ref MyPublic1Subnet
+        - !Ref MyPublic2Subnet
+
+  MyALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:  MyALB
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyALBtargetgroup
+      LoadBalancerArn: !Ref MyALB
+      Port: 80
+      Protocol: HTTP
